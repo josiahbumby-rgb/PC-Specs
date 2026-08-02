@@ -1,0 +1,108 @@
+import tkinter as tk
+import platform
+import socket
+import subprocess
+ 
+def safe_run(cmd):
+    try:
+        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=3)
+        return out.decode(errors="ignore").strip()
+    except Exception:
+        return None
+ 
+def get_specs():
+    lines = []
+    lines.append(f"Host: {socket.gethostname()}")
+    lines.append(f"OS: {platform.system()} {platform.release()}")
+    lines.append(f"CPU: {platform.processor() or 'Unknown'}")
+ 
+    # RAM / CPU load / disk via psutil
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        lines.append(f"RAM: {mem.used // (1024**3)} GB used / {mem.total // (1024**3)} GB total")
+        lines.append(f"CPU load: {psutil.cpu_percent(interval=0.3)}%")
+        disk = psutil.disk_usage('/')
+        lines.append(f"Disk: {disk.used // (1024**3)} GB used / {disk.total // (1024**3)} GB total")
+ 
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for name, entries in temps.items():
+                    if entries:
+                        lines.append(f"CPU temp ({name}): {entries[0].current:.0f}°C")
+                        break
+        except Exception:
+            pass
+    except ImportError:
+        lines.append("(pip install psutil for RAM/CPU/disk)")
+ 
+    # GPU via GPUtil, fallback to nvidia-smi
+    gpu_line = None
+    try:
+        import GPUtil
+        gpus = GPUtil.getGPUs()
+        if gpus:
+            g = gpus[0]
+            gpu_line = f"GPU: {g.name} — {g.load*100:.0f}% load, {g.temperature:.0f}°C"
+    except ImportError:
+        pass
+    if not gpu_line:
+        smi = safe_run('nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu --format=csv,noheader')
+        if smi:
+            parts = [p.strip() for p in smi.split(",")]
+            if len(parts) == 3:
+                gpu_line = f"GPU: {parts[0]} — {parts[1]} load, {parts[2]}°C"
+    lines.append(gpu_line or "GPU: (unavailable — install GPUtil or NVIDIA drivers)")
+ 
+    # Network: local IP, wifi signal, quick ping
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        lines.append(f"Local IP: {ip}")
+    except Exception:
+        pass
+ 
+    wifi = safe_run('netsh wlan show interfaces')
+    if wifi:
+        for line in wifi.splitlines():
+            if "Signal" in line:
+                lines.append(f"WiFi {line.strip()}")
+                break
+ 
+    ping = safe_run('ping -n 1 -w 1000 8.8.8.8')
+    if ping:
+        for line in ping.splitlines():
+            if "Average" in line or "ms" in line and "Reply" in line:
+                lines.append(f"Ping (8.8.8.8): {line.split('=')[-1].strip()}")
+                break
+ 
+    return lines
+ 
+def show_overlay():
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+    root.attributes("-alpha", 0.88)
+    root.configure(bg="#1e1e1e")
+ 
+    specs = get_specs()
+ 
+    pad = 14
+    tk.Label(root, text="PC Specs", fg="#7ee787", bg="#1e1e1e",
+              font=("Consolas", 12, "bold")).pack(anchor="w", padx=pad, pady=(pad, 4))
+ 
+    for line in specs:
+        tk.Label(root, text=line, fg="white", bg="#1e1e1e",
+                  font=("Consolas", 10), justify="left").pack(anchor="w", padx=pad)
+ 
+    root.update_idletasks()
+    w, h = root.winfo_reqwidth() + pad, root.winfo_reqheight() + pad
+    screen_w = root.winfo_screenwidth()
+    x, y = screen_w - w - 20, 20
+    root.geometry(f"{w}x{h}+{x}+{y}")
+ 
+    root.after(30000, root.destroy)
+    root.mainloop()
+ 
+if __name__ == "__main__":
+    show_overlay()
